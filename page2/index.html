@@ -8,7 +8,7 @@
         
         
         <link rel="shortcut icon" href="../img/favicon.ico">
-        <title>models.py - LR1</title>
+        <title>parser/main.py - LR3</title>
         <link href="../css/bootstrap.min.css" rel="stylesheet">
         <link href="../css/font-awesome.min.css" rel="stylesheet">
         <link href="../css/base.css" rel="stylesheet">
@@ -20,7 +20,7 @@
     <body>
         <div class="navbar fixed-top navbar-expand-lg navbar-dark bg-primary">
             <div class="container">
-                <a class="navbar-brand" href="..">LR1</a>
+                <a class="navbar-brand" href="..">LR3</a>
                 <!-- Expander button -->
                 <button type="button" class="navbar-toggler" data-toggle="collapse" data-target="#navbar-collapse">
                     <span class="navbar-toggler-icon"></span>
@@ -31,22 +31,22 @@
                         <!-- Main navigation -->
                         <ul class="nav navbar-nav">
                             <li class="navitem">
-                                <a href="../page1/" class="nav-link">Time Managment</a>
+                                <a href="../page1/" class="nav-link">Лабораторная работа 3</a>
                             </li>
                             <li class="navitem active">
-                                <a href="./" class="nav-link">models.py</a>
+                                <a href="./" class="nav-link">parser/main.py</a>
                             </li>
                             <li class="navitem">
-                                <a href="../page3/" class="nav-link">main.py</a>
+                                <a href="../page3/" class="nav-link">parser/celery_app.py</a>
                             </li>
                             <li class="navitem">
-                                <a href="../page4/" class="nav-link">app/Routes.py</a>
+                                <a href="../page4/" class="nav-link">parser/Dockerfile и parser/Dockerfile.celery</a>
                             </li>
                             <li class="navitem">
-                                <a href="../page5/" class="nav-link">pydanticModels.py</a>
+                                <a href="../page5/" class="nav-link">app/celery_client.py и app/Dockerfile</a>
                             </li>
                             <li class="navitem">
-                                <a href="../page6/" class="nav-link">conn.py</a>
+                                <a href="../page6/" class="nav-link">docker-compose.yml</a>
                             </li>
                         </ul>
 
@@ -84,7 +84,7 @@
     <div id="toc-collapse" class="navbar-collapse collapse card bg-secondary">
         <ul class="nav flex-column">
             
-            <li class="nav-item" data-level="1"><a href="#modelspy" class="nav-link">models.py</a>
+            <li class="nav-item" data-level="1"><a href="#parsermainpy" class="nav-link">parser/main.py</a>
               <ul class="nav flex-column">
               </ul>
             </li>
@@ -93,44 +93,39 @@
 </div></div>
                     <div class="col-md-9" role="main">
 
-<h1 id="modelspy">models.py</h1>
-<pre><code>class User(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    username: str = Field(index=True)
-    hashed_password: str 
-    password: Optional[str] = Field(default=None, exclude=True)
-    is_active: bool = Field(default=True)  
-    tasks: List[&quot;Task&quot;] = Relationship(back_populates=&quot;owner&quot;)
+<h1 id="parsermainpy">parser/main.py</h1>
+<h3 id="celery-url">Реализуем два основных эндпоинта для работы с задачами Celery и один маршрут для синхронного парсинга URL</h3>
+<ol>
+<li>Когда клиент отправляет POST-запрос на /celery-task с URL, создается асинхронная задача Celery для парсинга этого URL.</li>
+<li>Клиент получает идентификатор задачи и может использовать его для проверки статуса задачи через GET-запрос на /celery-task-status/{task_id}.</li>
+<li>Для синхронного парсинга URL клиент может отправить POST-запрос на /parse с URL</li>
+</ol>
+<pre><code>app = FastAPI()
 
-class TaskCategory(SQLModel, table=True):
-    task_id: int = Field(foreign_key=&quot;task.id&quot;, primary_key=True)
-    category_id: int = Field(foreign_key=&quot;category.id&quot;, primary_key=True)
-    additional_info: str  
-    task: &quot;Task&quot; = Relationship(back_populates=&quot;task_categories&quot;)
-    category: &quot;Category&quot; = Relationship(back_populates=&quot;category_tasks&quot;)
+class URLRequest(BaseModel):
+    url: HttpUrl
 
-class Task(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    title: str
-    description: str
-    deadline: Optional[date] = None 
-    priority: int = Field(default=1)
-    user_id: Optional[int] = Field(default=None, foreign_key=&quot;user.id&quot;)
-    owner: User = Relationship(back_populates=&quot;tasks&quot;)
-    task_categories: List[TaskCategory] = Relationship(back_populates=&quot;task&quot;)  
-    time_logs: List[&quot;TimeLog&quot;] = Relationship(back_populates=&quot;task&quot;)
+@app.post(&quot;/celery-task&quot;)
+async def celery_task_endpoint(request: URLRequest):
+    try:
+        print (request.url)
+        task = celery_app.send_task('celery_app.parse_url_task', args=[str(request.url)])
+        return {&quot;task_id&quot;: task.id, &quot;status&quot;: &quot;Task has been submitted&quot;}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
-class Category(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str
-    category_tasks: List[TaskCategory] = Relationship(back_populates=&quot;category&quot;)  
+@app.get(&quot;/celery-task-status/{task_id}&quot;)
+async def get_celery_task_status(task_id: str):
+    task_result = AsyncResult(task_id)
+    if task_result.state == 'FAILURE':
+        return {&quot;task_id&quot;: task_id, &quot;status&quot;: task_result.state, &quot;error&quot;: str(task_result.result)}
+    return {&quot;task_id&quot;: task_id, &quot;status&quot;: task_result.state, &quot;result&quot;: task_result.result}
 
-class TimeLog(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    task_id: int = Field(foreign_key=&quot;task.id&quot;)
-    time_spent_minutes: int
-    date_logged: date
-    task: Task = Relationship(back_populates=&quot;time_logs&quot;)
+
+@app.post(&quot;/parse&quot;)
+def parse(url: str, db: Session = Depends(get_session)):
+    return parse_and_save(db=db, url=url)
+
 </code></pre></div>
             </div>
         </div>
